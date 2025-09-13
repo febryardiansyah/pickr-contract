@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 contract Pickr {
     constructor() {
@@ -38,54 +38,29 @@ contract Pickr {
     mapping(address => string[]) private raffleCodesByCreator;
 
     // events
-    event RaffleCreated(
-        string indexed code,
-        address indexed creator,
-        uint256 initialDeposit
-    );
+    event RaffleCreated(string indexed code, address indexed creator, uint256 initialDeposit);
     event RaffleStarted(string indexed code);
-    event WinnerSelected(
-        string indexed code,
-        address indexed user,
-        uint256 amount
-    );
-    event Deposited(
-        string indexed code,
-        address indexed creator,
-        uint256 amount
-    );
+    event WinnerSelected(string indexed code, address indexed user, uint256 amount);
+    event Deposited(string indexed code, address indexed creator, uint256 amount);
     event JoinRaffle(string indexed code, address indexed user);
     event LeaveRaffle(string indexed code, address indexed user);
-    event Claimed(
-        string indexed code,
-        address indexed userClaim,
-        uint256 claimAmount
-    );
+    event Claimed(string indexed code, address indexed userClaim, uint256 claimAmount);
     event RaffleClosed(string indexed code);
 
     // main functions
-    function createRaffle(
-        uint256 maxParticipant,
-        uint256 minParticipant,
-        string calldata code
-    ) external payable returns (string memory) {
+    function createRaffle(uint256 maxParticipant, uint256 minParticipant, string calldata code)
+        external
+        payable
+        returns (string memory)
+    {
         require(msg.value > 0, "Initial deposit is required");
-        require(
-            maxParticipant > minParticipant,
-            "Max participant must be greater than min participant"
-        );
+        require(maxParticipant > minParticipant, "Max participant must be greater than min participant");
         require(minParticipant > 0, "Min participant must be greater than 0");
         require(bytes(code).length > 0, "Code is required");
         require(!_isRaffleExist(code), "Code already used"); // added
 
         raffles[code] = Raffle(
-            msg.sender,
-            msg.value,
-            RaffleStatus.ACTIVE,
-            maxParticipant,
-            minParticipant,
-            0,
-            uint64(block.timestamp)
+            msg.sender, msg.value, RaffleStatus.ACTIVE, maxParticipant, minParticipant, 0, uint64(block.timestamp)
         );
 
         raffleCodesByCreator[msg.sender].push(code);
@@ -97,10 +72,7 @@ contract Pickr {
     function deposit(string calldata code) external payable {
         require(_isRaffleExist(code), "Raffle does not exist");
         Raffle storage raffle = raffles[code];
-        require(
-            raffle.status == RaffleStatus.ACTIVE,
-            "Raffle is already inactive or started"
-        );
+        require(raffle.status == RaffleStatus.ACTIVE, "Raffle is already inactive or started");
         require(msg.value > 0, "Deposit must be greater than 0");
 
         raffle.balance += msg.value;
@@ -110,24 +82,15 @@ contract Pickr {
 
     function startRaffle(string calldata code) external onlyCreator(code) {
         Raffle storage raffle = raffles[code];
-        require(
-            raffle.status == RaffleStatus.ACTIVE,
-            "Raffle is already inactive or started"
-        );
-        require(
-            raffle.totalParticipant >= raffle.minParticipant,
-            "Not enough participants"
-        );
+        require(raffle.status == RaffleStatus.ACTIVE, "Raffle is already inactive or started");
+        require(raffle.totalParticipant >= raffle.minParticipant, "Not enough participants");
 
         raffle.status = RaffleStatus.STARTED;
 
         emit RaffleStarted(code);
     }
 
-    function winnerSelected(
-        string calldata code,
-        address winner
-    ) external onlyCreator(code) {
+    function winnerSelected(string calldata code, address winner) external onlyCreator(code) {
         Raffle storage raffle = raffles[code];
         require(raffle.status == RaffleStatus.STARTED, "Raffle is not started");
         require(winner != address(0), "Invalid winner");
@@ -140,33 +103,22 @@ contract Pickr {
         raffle.status = RaffleStatus.INACTIVE;
         raffle.balance = 0;
 
-        (bool ok, ) = payable(winner).call{value: prize}("");
+        (bool ok,) = payable(winner).call{value: prize}("");
         require(ok, "Winner payout failure");
 
         emit WinnerSelected(code, winner, prize);
     }
 
-    function raffleParticipants(
-        string calldata code
-    ) external view returns (address[] memory) {
+    function raffleParticipants(string calldata code) external view returns (address[] memory) {
         return participants[code];
     }
 
     function joinRaffle(string calldata code) external {
         require(_isRaffleExist(code), "Raffle does not exist");
         Raffle storage raffle = raffles[code];
-        require(
-            raffle.creator != msg.sender,
-            "You can't join to your own raffle"
-        );
-        require(
-            raffle.status == RaffleStatus.ACTIVE,
-            "Raffle is already inactive or started"
-        );
-        require(
-            raffle.totalParticipant < raffle.maxParticipant,
-            "Raffle is full"
-        );
+        require(raffle.creator != msg.sender, "You can't join to your own raffle");
+        require(raffle.status == RaffleStatus.ACTIVE, "Raffle is already inactive or started");
+        require(raffle.totalParticipant < raffle.maxParticipant, "Raffle is full");
 
         bool joined = hasJoined[code][msg.sender];
         require(!joined, "You have already joined");
@@ -181,10 +133,7 @@ contract Pickr {
     function leaveRaffle(string calldata code) external {
         require(_isRaffleExist(code), "Raffle does not exist");
         Raffle storage raffle = raffles[code];
-        require(
-            raffle.status == RaffleStatus.ACTIVE,
-            "Raffle is already inactive or started"
-        );
+        require(raffle.status == RaffleStatus.ACTIVE, "Raffle is already inactive or started");
         bool joined = hasJoined[code][msg.sender];
         require(joined, "You have not joined the raffle yet");
 
@@ -205,17 +154,14 @@ contract Pickr {
 
     function closeRaffle(string calldata code) external onlyCreator(code) {
         Raffle storage raffle = raffles[code];
-        require(
-            raffle.status == RaffleStatus.ACTIVE,
-            "Raffle can only be closed before start"
-        );
+        require(raffle.status == RaffleStatus.ACTIVE, "Raffle can only be closed before start");
 
         uint256 refund = raffle.balance;
         raffle.balance = 0;
         raffle.status = RaffleStatus.INACTIVE;
 
         if (refund > 0) {
-            (bool ok, ) = payable(raffle.creator).call{value: refund}("");
+            (bool ok,) = payable(raffle.creator).call{value: refund}("");
             require(ok, "Refund failure");
         }
 
@@ -230,11 +176,7 @@ contract Pickr {
         return raffleCodesByCreator[creator];
     }
 
-    function getUserRaffles(address creator)
-        external
-        view
-        returns (Raffle[] memory, string[] memory)
-    {
+    function getUserRaffles(address creator) external view returns (Raffle[] memory, string[] memory) {
         string[] memory codes = raffleCodesByCreator[creator];
         Raffle[] memory list = new Raffle[](codes.length);
         for (uint256 i = 0; i < codes.length; i++) {
