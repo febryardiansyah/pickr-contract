@@ -1,191 +1,198 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-contract Pickr {
+import "./IPickr.sol";
+
+contract Pickr is IPickr {
     constructor() {
         owner = msg.sender;
     }
 
-    modifier onlyCreator(string memory code) {
-        require(_isRaffleExist(code), "Raffle does not exist");
-        require(raffles[code].creator == msg.sender, "Not authorized");
+    modifier onlyCreator(bytes32 docIdHash) {
+        if (!_isRoomExist(docIdHash)) {
+            revert ErrorRoomIsNotExist(docIdHash);
+        }
+        if (msg.sender != rooms[docIdHash].creator) {
+            revert ErrorNotAuthorized(msg.sender);
+        }
         _;
     }
 
-    enum RaffleStatus {
-        ACTIVE,
-        INACTIVE,
-        STARTED
-    }
+    address public immutable owner;
 
-    // models
-    struct Raffle {
-        address creator;
-        uint256 balance;
-        RaffleStatus status;
-        uint256 maxParticipant;
-        uint256 minParticipant;
-        uint256 totalParticipant;
-        uint64 createdAt;
-    }
-
-    address public owner;
-
-    mapping(string => Raffle) public raffles;
-    mapping(string => mapping(address => bool)) private hasJoined;
-    mapping(string => address[]) private participants;
-    mapping(string => address) public winners;
-    mapping(address => string[]) private raffleCodesByCreator;
-
-    // events
-    event RaffleCreated(string indexed code, address indexed creator, uint256 initialDeposit);
-    event RaffleStarted(string indexed code);
-    event WinnerSelected(string indexed code, address indexed user, uint256 amount);
-    event Deposited(string indexed code, address indexed creator, uint256 amount);
-    event JoinRaffle(string indexed code, address indexed user);
-    event LeaveRaffle(string indexed code, address indexed user);
-    event Claimed(string indexed code, address indexed userClaim, uint256 claimAmount);
-    event RaffleClosed(string indexed code);
+    mapping(bytes32 docIdHash => Room) public rooms;
+    mapping(bytes32 docIdHash => mapping(address => bool)) private hasJoined;
+    mapping(bytes32 docIdHash => address[]) private participants;
+    mapping(bytes32 docIdHash => address) public winners;
+    mapping(address user => bytes32[]) private roomCodesByCreator;
 
     // main functions
-    function createRaffle(uint256 maxParticipant, uint256 minParticipant, string calldata code)
+    function createRoom(bytes32 docIdHash, RoomAccessMode accessMode, uint256 minParticipant, uint256 maxParticipant)
         external
         payable
-        returns (string memory)
     {
-        require(msg.value > 0, "Initial deposit is required");
-        require(maxParticipant > minParticipant, "Max participant must be greater than min participant");
-        require(minParticipant > 0, "Min participant must be greater than 0");
-        require(bytes(code).length > 0, "Code is required");
-        require(!_isRaffleExist(code), "Code already used"); // added
+        if (msg.value == 0) revert ErrorDepositRequired();
 
-        raffles[code] = Raffle(
-            msg.sender, msg.value, RaffleStatus.ACTIVE, maxParticipant, minParticipant, 0, uint64(block.timestamp)
+        if (maxParticipant < minParticipant) {
+            revert ErrorMaxParticipantLessThanMin();
+        }
+        if (minParticipant == 0) {
+            revert ErrorMinParticipantMustBeGreaterThanZero();
+        }
+        if (docIdHash == bytes32(0)) revert ErrorCodeIsRequired();
+        if (_isRoomExist(docIdHash)) {
+            revert ErrorCodeAlreadyUsed(docIdHash);
+        }
+
+        rooms[docIdHash] = Room(
+            msg.sender,
+            msg.value,
+            RoomStatus.ACTIVE,
+            accessMode,
+            maxParticipant,
+            minParticipant,
+            0,
+            uint64(block.timestamp)
         );
 
-        raffleCodesByCreator[msg.sender].push(code);
-
-        emit RaffleCreated(code, msg.sender, msg.value);
-        return code;
+        roomCodesByCreator[msg.sender].push(docIdHash);
     }
 
-    function deposit(string calldata code) external payable {
-        require(_isRaffleExist(code), "Raffle does not exist");
-        Raffle storage raffle = raffles[code];
-        require(raffle.status == RaffleStatus.ACTIVE, "Raffle is already inactive or started");
-        require(msg.value > 0, "Deposit must be greater than 0");
+    function deposit(bytes32 docIdHash) external payable onlyCreator(docIdHash) {
+        if (!_isRoomExist(docIdHash)) revert ErrorRoomIsNotExist(docIdHash);
 
-        raffle.balance += msg.value;
+        Room storage room = rooms[docIdHash];
+        if (room.status != RoomStatus.ACTIVE) {
+            revert ErrorRoomIsNotActive(docIdHash);
+        }
 
-        emit Deposited(code, msg.sender, msg.value);
+        if (msg.value == 0) revert ErrorDepositRequired();
+
+        room.balance += msg.value;
     }
 
-    function startRaffle(string calldata code) external onlyCreator(code) {
-        Raffle storage raffle = raffles[code];
-        require(raffle.status == RaffleStatus.ACTIVE, "Raffle is already inactive or started");
-        require(raffle.totalParticipant >= raffle.minParticipant, "Not enough participants");
+    function startRoom(bytes32 docIdHash) external onlyCreator(docIdHash) {
+        Room storage room = rooms[docIdHash];
+        if (room.status != RoomStatus.ACTIVE) {
+            revert ErrorRoomIsNotActive(docIdHash);
+        }
 
-        raffle.status = RaffleStatus.STARTED;
+        if (room.totalParticipant <= room.minParticipant) {
+            revert ErrorNotEnoughParticipant(docIdHash);
+        }
 
-        emit RaffleStarted(code);
+        room.status = RoomStatus.STARTED;
     }
 
-    function winnerSelected(string calldata code, address winner) external onlyCreator(code) {
-        Raffle storage raffle = raffles[code];
-        require(raffle.status == RaffleStatus.STARTED, "Raffle is not started");
-        require(winner != address(0), "Invalid winner");
-        require(hasJoined[code][winner], "Winner not a participant");
+    function winnerSelected(bytes32 docIdHash, address winner) external onlyCreator(docIdHash) {
+        Room storage room = rooms[docIdHash];
+        if (room.status != RoomStatus.STARTED) {
+            revert ErrorRoomIsNotStarted(docIdHash);
+        }
+        if (winner == address(0)) revert ErrorInvalidWinner(docIdHash);
+        if (!hasJoined[docIdHash][winner]) {
+            revert ErrorAddressIsNotParticipant(docIdHash, winner);
+        }
 
-        uint256 prize = raffle.balance;
+        uint256 prize = room.balance;
         require(prize > 0, "No prize balance");
 
-        winners[code] = winner;
-        raffle.status = RaffleStatus.INACTIVE;
-        raffle.balance = 0;
+        winners[docIdHash] = winner;
+        room.status = RoomStatus.INACTIVE;
+        room.balance = 0;
 
         (bool ok,) = payable(winner).call{value: prize}("");
         require(ok, "Winner payout failure");
-
-        emit WinnerSelected(code, winner, prize);
     }
 
-    function raffleParticipants(string calldata code) external view returns (address[] memory) {
-        return participants[code];
+    function roomParticipants(bytes32 docIdHash) external view returns (address[] memory) {
+        return participants[docIdHash];
     }
 
-    function joinRaffle(string calldata code) external {
-        require(_isRaffleExist(code), "Raffle does not exist");
-        Raffle storage raffle = raffles[code];
-        require(raffle.creator != msg.sender, "You can't join to your own raffle");
-        require(raffle.status == RaffleStatus.ACTIVE, "Raffle is already inactive or started");
-        require(raffle.totalParticipant < raffle.maxParticipant, "Raffle is full");
+    function joinRoom(bytes32 docIdHash) external {
+        if (!_isRoomExist(docIdHash)) revert ErrorRoomIsNotExist(docIdHash);
 
-        bool joined = hasJoined[code][msg.sender];
-        require(!joined, "You have already joined");
+        Room storage room = rooms[docIdHash];
+        if (msg.sender == room.creator) {
+            revert ErrorUserIsTheRoomOwner(docIdHash);
+        }
 
-        hasJoined[code][msg.sender] = true;
-        raffle.totalParticipant++;
-        participants[code].push(msg.sender);
+        if (room.status != RoomStatus.ACTIVE) {
+            revert ErrorRoomIsNotActive(docIdHash);
+        }
 
-        emit JoinRaffle(code, msg.sender);
+        if (room.totalParticipant >= room.maxParticipant) {
+            revert ErrorRoomIsFull(docIdHash);
+        }
+
+        bool joined = hasJoined[docIdHash][msg.sender];
+        if (joined) revert ErrorUserAlreadyJoinRoom(docIdHash);
+
+        hasJoined[docIdHash][msg.sender] = true;
+        room.totalParticipant++;
+        participants[docIdHash].push(msg.sender);
     }
 
-    function leaveRaffle(string calldata code) external {
-        require(_isRaffleExist(code), "Raffle does not exist");
-        Raffle storage raffle = raffles[code];
-        require(raffle.status == RaffleStatus.ACTIVE, "Raffle is already inactive or started");
-        bool joined = hasJoined[code][msg.sender];
-        require(joined, "You have not joined the raffle yet");
+    function leaveRoom(bytes32 docIdHash) external {
+        if (!_isRoomExist(docIdHash)) {
+            revert ErrorRoomIsNotExist(docIdHash);
+        }
 
-        raffle.totalParticipant--;
-        hasJoined[code][msg.sender] = false;
+        Room storage room = rooms[docIdHash];
+        if (room.status != RoomStatus.ACTIVE) {
+            revert ErrorRoomIsNotActive(docIdHash);
+        }
 
-        uint256 length = participants[code].length;
+        bool joined = hasJoined[docIdHash][msg.sender];
+        if (!joined) revert ErrorUserIsNotParticipant(docIdHash);
+
+        room.totalParticipant--;
+        hasJoined[docIdHash][msg.sender] = false;
+
+        uint256 length = participants[docIdHash].length;
         for (uint256 i = 0; i < length; i++) {
-            if (participants[code][i] == msg.sender) {
-                participants[code][i] = participants[code][length - 1];
-                participants[code].pop();
+            if (participants[docIdHash][i] == msg.sender) {
+                participants[docIdHash][i] = participants[docIdHash][length - 1];
+                participants[docIdHash].pop();
                 break;
             }
         }
-
-        emit LeaveRaffle(code, msg.sender);
     }
 
-    function closeRaffle(string calldata code) external onlyCreator(code) {
-        Raffle storage raffle = raffles[code];
-        require(raffle.status == RaffleStatus.ACTIVE, "Raffle can only be closed before start");
-
-        uint256 refund = raffle.balance;
-        raffle.balance = 0;
-        raffle.status = RaffleStatus.INACTIVE;
-
-        if (refund > 0) {
-            (bool ok,) = payable(raffle.creator).call{value: refund}("");
-            require(ok, "Refund failure");
+    function closeRoom(bytes32 docIdHash) external onlyCreator(docIdHash) {
+        Room storage room = rooms[docIdHash];
+        if (room.status != RoomStatus.ACTIVE) {
+            revert ErrorRoomIsNotActive(docIdHash);
         }
 
-        emit RaffleClosed(code);
+        uint256 refund = room.balance;
+        room.balance = 0;
+        room.status = RoomStatus.INACTIVE;
+
+        if (refund > 0) {
+            (bool ok,) = payable(room.creator).call{value: refund}("");
+            require(ok, "Refund failure");
+        }
     }
 
-    function _isRaffleExist(string memory code) private view returns (bool) {
-        return raffles[code].creator != address(0);
+    function _isRoomExist(bytes32 docIdHash) private view returns (bool) {
+        return rooms[docIdHash].creator != address(0);
     }
 
-    function getUserRaffleCodes(address creator) external view returns (string[] memory) {
-        return raffleCodesByCreator[creator];
+    function getUserRoomCodes(address creator) external view returns (bytes32[] memory) {
+        return roomCodesByCreator[creator];
     }
 
-    function getUserRaffles(address creator) external view returns (Raffle[] memory, string[] memory) {
-        string[] memory codes = raffleCodesByCreator[creator];
-        Raffle[] memory list = new Raffle[](codes.length);
+    function getUserRooms(address creator) external view returns (Room[] memory, bytes32[] memory) {
+        bytes32[] memory codes = roomCodesByCreator[creator];
+        Room[] memory list = new Room[](codes.length);
         for (uint256 i = 0; i < codes.length; i++) {
-            list[i] = raffles[codes[i]];
+            list[i] = rooms[codes[i]];
         }
         return (list, codes);
     }
 
     receive() external payable {
-        revert("use createRaffle/deposit with code");
+        revert("use createRoom/deposit with code");
     }
 }
