@@ -6,6 +6,8 @@ solc_version = "0.8.20"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
+base-sepolia = "${BASE_SEPOLIA_RPC_URL}"
+
 [etherscan]
 # Configure API keys per explorer. Keep keys in .env files.
 base = { key = "${BASESCAN_API_KEY}" }
